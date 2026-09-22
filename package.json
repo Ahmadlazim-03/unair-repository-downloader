@@ -9,6 +9,17 @@
     "preview": "vite preview --host 127.0.0.1",
     "test": "python -m unittest discover -s tests -v"
   },
-  "dependencies": {"react": "19.3.0", "react-dom": "19.3.0", "lucide-react": "^0.577.0"},
-  "devDependencies": {"@types/react": "^19.0.0", "@types/react-dom": "^19.0.0", "@vitejs/plugin-react": "latest", "typescript": "~5.9.3", "vite": "8.3.0"}
+  "dependencies": {
+    "jspdf": "^4.2.1",
+    "lucide-react": "^0.577.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "latest",
+    "typescript": "~5.9.3",
+    "vite": "8.3.0"
+  }
 }
