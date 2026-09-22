@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.venv/
+.env
+.env.*
+!.env.example
+__pycache__/
+*.pyc
+*.tsbuildinfo
+.vercel/
+.runtime/
+artifacts/
+*.pdf
+*.conf
+*.ovpn
+*.log
