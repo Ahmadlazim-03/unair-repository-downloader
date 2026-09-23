@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { ArrowDownToLine, ArrowRight, BookOpen, Check, CheckCircle2, ChevronDown, CircleHelp, FileText, KeyRound, Link2, LoaderCircle, LockKeyhole, ShieldCheck, Trash2, Wifi, X } from 'lucide-react';
 import './style.css';
 
-const API = (import.meta.env.VITE_API_URL || 'https://unairrepositorydownloader-d6x2bsd9.b4a.run').replace(/\/$/, '');
+const API = (import.meta.env.VITE_API_URL || 'https://unairrepositorydownloader-7859ib84.b4a.run').replace(/\/$/, '');
 type Health = {vpn_mode: string; access_key_required: boolean; retention_seconds: number; status: string; message?: string};
 type Ticket = {id: string; token: string; expires_at: number};
 type Progress = {state: string; message: string; current: number; total: number; warning?: string; result?: {pages: number; bytes: number; title: string}; expires_at: number};

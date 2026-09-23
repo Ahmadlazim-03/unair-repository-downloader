@@ -17,7 +17,7 @@ User cukup buka web, isi URL + kredensial kampus, klik Buat PDF. Server menangan
 
 ### Frontend (Vercel)
 1. Import repository di Vercel. Framework: Vite.
-2. Backend produksi: `https://unairrepositorydownloader-d6x2bsd9.b4a.run`. `buildCommand` pada `vercel.json` menetapkan `VITE_API_URL` saat build agar pengaturan lama di dashboard tidak mengarah ke backend sebelumnya. Jika pindah backend, perbarui URL di `vercel.json` dan fallback `src/main.tsx`.
+2. Backend aktif: `https://unairrepositorydownloader-7859ib84.b4a.run`. `buildCommand` pada `vercel.json` menetapkan `VITE_API_URL` saat build agar pengaturan lama di dashboard tidak mengarah ke backend sebelumnya. Jika pindah backend, perbarui URL di `vercel.json`, fallback `src/main.tsx`, dan default `scripts/check-production.py`. Deployment sementara yang memiliki waktu kedaluwarsa tidak menjamin ketersediaan produksi; gunakan layanan dengan masa aktif yang sesuai kebutuhan.
 3. Deploy.
 
 ### Backend (Back4App Containers)
@@ -44,6 +44,8 @@ Versi ini ditandai dengan `"revision":"repository-tls-4"` dan `"wireproxy_versio
 Uji langsung 2026-09-23 menemukan rantai HTTPS repository yang tidak cocok: leaf `*.unair.ac.id` diterbitkan Sectigo DV R36, tetapi server mengirim intermediate lama. Aplikasi melengkapi issuer R36 resmi, menggunakan root certifi, dan tetap memverifikasi hostname, tanggal, serta rantai lengkap ke root terpercaya. Detail sumber dan hash ada di `backend/certs/README.md`. Endpoint login modal INLISLite juga diarahkan ke `/opac/site/loginanggota`, sesuai alur AJAX situs. Profil TCP yang membutuhkan ProxyGuard tidak ditawarkan sebagai profil Wireproxy UDP.
 
 Untuk memeriksa produksi secara nyata, gunakan `scripts/check-production.py --url URL_KATALOG --expected-pages 93` dengan Python dari `.venv`. Skrip meminta kredensial tanpa menampilkannya, login ke backend, menunggu PDF, memverifikasi jumlah/gambar setiap halaman dan cleanup, menyimpan PDF serta laporan tanpa kredensial di `.runtime`, lalu menghapus hasil uji dari server. Parameter jumlah halaman harus sesuai dokumen yang diuji.
+
+Hasil uji nyata Back4App pada 2026-09-23, revisi `repository-tls-4`: login portal, tunnel UDP, login katalog, pengambilan halaman, penyusunan dan unduhan PDF berhasil. Dokumen contoh memiliki 93 halaman / 18.707.971 byte; proses selesai dalam 82,8 detik tanpa peringatan cleanup. Ke-93 gambar halaman unik dan cocok berurutan dengan hasil lokal. Laporan dan PDF tersimpan lokal di `.runtime/production-verified.json` / `.runtime/production-verified.pdf` (tidak masuk Git). Hasil ini membuktikan alur dokumen tersebut; masa aktif hosting tetap mengikuti paket/deployment operator.
 
 Wireproxy 1.0.8 menerapkan aturan Landlock saat startup Linux yang dapat gagal jika path seperti `/dev/log` tidak ada pada image minimal. Pemeriksaan `--version` dan `--configtest` tidak menjalankan tahap tersebut. Rilis 1.1.3 memakai `IgnoreIfMissing()` pada aturan path tersebut ([kode upstream](https://github.com/windtf/wireproxy/blob/v1.1.3/cmd/wireproxy/main.go)); isolasi container dan Landlock tetap aktif.
 
