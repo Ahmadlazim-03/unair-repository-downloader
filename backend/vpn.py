@@ -1,4 +1,5 @@
 """Official eduVPN manual-configuration flow; one isolated worker, one job at a time."""
+import base64
 import configparser
 import ipaddress
 import os
@@ -16,6 +17,44 @@ from urllib.parse import urljoin
 from bs4 import BeautifulSoup
 
 from .repository import Session, UserError, VPN, hidden_fields
+
+
+def extract_wireguard_config(text: str) -> str:
+    # 1. Direct WireGuard config in text
+    if "[Interface]" in text and "[Peer]" in text:
+        match = re.search(r"(\[Interface\][\s\S]*?\[Peer\][\s\S]*?)(?:</string>|\Z)", text)
+        if match:
+            return match.group(1).strip()
+
+    # 2. Inside data: URI (e.g. Apple mobileconfig base64 payload from eduVPN 3)
+    for b64 in re.findall(r"data:application/[^;]+;base64,([A-Za-z0-9+/=]+)", text):
+        try:
+            decoded = base64.b64decode(b64).decode("utf-8", errors="replace")
+            wg_match = re.search(r"<key>WgQuickConfig</key>\s*<string>([\s\S]*?)</string>", decoded)
+            if wg_match:
+                return wg_match.group(1).strip()
+            if "[Interface]" in decoded and "[Peer]" in decoded:
+                m2 = re.search(r"(\[Interface\][\s\S]*?\[Peer\][\s\S]*?)(?:</string>|\Z)", decoded)
+                if m2:
+                    return m2.group(1).strip()
+        except Exception:
+            continue
+
+    # 3. Fallback: search any long base64 string
+    for b64 in re.findall(r"([A-Za-z0-9+/]{80,}={0,2})", text):
+        try:
+            decoded = base64.b64decode(b64).decode("utf-8", errors="replace")
+            if "[Interface]" in decoded and "[Peer]" in decoded:
+                wg_match = re.search(r"<key>WgQuickConfig</key>\s*<string>([\s\S]*?)</string>", decoded)
+                if wg_match:
+                    return wg_match.group(1).strip()
+                m2 = re.search(r"(\[Interface\][\s\S]*?\[Peer\][\s\S]*?)(?:</string>|\Z)", decoded)
+                if m2:
+                    return m2.group(1).strip()
+        except Exception:
+            continue
+
+    raise UserError("Portal tidak memberikan konfigurasi WireGuard. Profil mungkin tidak mendukung protokol ini.")
 
 
 class Portal:
@@ -60,14 +99,14 @@ class Portal:
             raise UserError("Profil VPN tidak tersedia untuk akun ini.")
         form = select.find_parent("form")
         fields = hidden_fields(form)
+        fields.setdefault("action", "add_config")
         fields.update(profileId=profile_id, displayName=self.name, useProto="wireguard")
         # Cleanup also runs after an interrupted/failed response: creation may have succeeded.
         self.created = True
-        body, _, _ = self.post(urljoin(page, form.get("action", "addConfig")), fields)
-        config = body.decode("utf-8")
-        if "[Interface]" not in config or "[Peer]" not in config:
-            raise UserError("Portal tidak memberikan konfigurasi WireGuard. Profil mungkin tidak mendukung protokol ini.")
-        return config
+        target_action = form.get("action")
+        target_url = urljoin(page, target_action) if target_action else page
+        body, _, _ = self.post(target_url, fields)
+        return extract_wireguard_config(body.decode("utf-8", errors="replace"))
 
     def close(self):
         warning = None
@@ -78,13 +117,14 @@ class Portal:
                     raise UserError("session expired")
                 for row in soup.select("tr"):
                     # Exact generated label only; never delete another client's configuration.
-                    if not any(x.get("title") == self.name or x.get_text(strip=True) == self.name
-                               for x in row.select("span")):
+                    if not any(x.get("title") == self.name or x.get_text(strip=True) == self.name or self.name in x.get_text()
+                               for x in row.select("span, td")):
                         continue
-                    field = row.select_one('input[name="connectionId"]')
-                    if field:
-                        form = field.find_parent("form")
-                        self.post(urljoin(page, form.get("action", "deleteConfig")), hidden_fields(form))
+                    form = row.select_one("form")
+                    if form:
+                        target_action = form.get("action")
+                        target_url = urljoin(page, target_action) if target_action else page
+                        self.post(target_url, hidden_fields(form))
                         break
             self.post(VPN + "_logout", {})
         except Exception:
@@ -107,6 +147,10 @@ def sanitized_config(raw, repository_ips):
         pubkey = peer["PublicKey"]
         if not all(re.fullmatch(r"[A-Za-z0-9+/]{43}=", k) for k in (key, pubkey)):
             raise ValueError("key")
+        psk = peer.get("PresharedKey", "").strip()
+        if psk and not re.fullmatch(r"[A-Za-z0-9+/]{43}=", psk):
+            raise ValueError("psk")
+        psk_line = f"PresharedKey = {psk}\n" if psk else ""
         addresses = [str(ipaddress.ip_interface(x.strip())) for x in interface["Address"].split(",")
                      if ipaddress.ip_interface(x.strip()).version == 4]
         if not addresses:
@@ -116,7 +160,7 @@ def sanitized_config(raw, repository_ips):
             raise ValueError("endpoint")
         # Rebuild from validated fields: no hooks, shell commands, default routes, or DNS changes.
         return (f"[Interface]\nPrivateKey = {key}\nAddress = {','.join(addresses)}\nTable = off\n"
-                f"[Peer]\nPublicKey = {pubkey}\nAllowedIPs = {','.join(ip + '/32' for ip in repository_ips)}\n"
+                f"[Peer]\nPublicKey = {pubkey}\n{psk_line}AllowedIPs = {','.join(ip + '/32' for ip in repository_ips)}\n"
                 f"Endpoint = {endpoint}\nPersistentKeepalive = 25\n")
     except (KeyError, ValueError, configparser.Error):
         raise UserError("Konfigurasi WireGuard dari portal tidak didukung.") from None
@@ -131,6 +175,10 @@ def wireproxy_config(raw, bind_port=1080):
         pubkey = peer["PublicKey"]
         if not all(re.fullmatch(r"[A-Za-z0-9+/]{43}=", k) for k in (key, pubkey)):
             raise ValueError("key")
+        psk = peer.get("PresharedKey", "").strip()
+        if psk and not re.fullmatch(r"[A-Za-z0-9+/]{43}=", psk):
+            raise ValueError("psk")
+        psk_line = f"PresharedKey = {psk}\n" if psk else ""
         addresses = [str(ipaddress.ip_interface(x.strip())) for x in interface["Address"].split(",")
                      if ipaddress.ip_interface(x.strip()).version == 4]
         if not addresses:
@@ -140,7 +188,7 @@ def wireproxy_config(raw, bind_port=1080):
             raise ValueError("endpoint")
         dns = interface.get("DNS", "1.1.1.1").strip()
         return (f"[Interface]\nPrivateKey = {key}\nAddress = {','.join(addresses)}\nDNS = {dns}\n\n"
-                f"[Peer]\nPublicKey = {pubkey}\nEndpoint = {endpoint}\nAllowedIPs = 0.0.0.0/0\n"
+                f"[Peer]\nPublicKey = {pubkey}\n{psk_line}Endpoint = {endpoint}\nAllowedIPs = 0.0.0.0/0\n"
                 f"PersistentKeepalive = 25\n\n"
                 f"[Socks5]\nBindAddress = 127.0.0.1:{bind_port}\n")
     except (KeyError, ValueError, configparser.Error):
