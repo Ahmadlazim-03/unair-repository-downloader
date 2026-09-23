@@ -1,0 +1,23 @@
+name: Backend Linux container
+
+on:
+  push:
+    branches: [main]
+    paths: ['backend/**', 'tests/**', 'Dockerfile', '.dockerignore', '.github/workflows/backend-container.yml']
+  pull_request:
+    paths: ['backend/**', 'tests/**', 'Dockerfile', '.dockerignore', '.github/workflows/backend-container.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image and test Wireproxy startup as non-root
+        run: docker build --tag arsip-ci .
+      - name: Test API, VPN lifecycle and actual Linux Wireproxy
+        run: docker run --rm --entrypoint python --volume "$PWD/tests:/app/tests:ro" arsip-ci -m unittest discover -s tests -v

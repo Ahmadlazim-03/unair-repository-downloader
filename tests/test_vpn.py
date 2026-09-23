@@ -11,7 +11,7 @@ from unittest.mock import patch
 from bs4 import BeautifulSoup
 
 from backend.repository import UserError
-from backend.vpn import Portal, Tunnel, ensure_wireproxy, extract_wireguard_config, wireproxy_config, wireproxy_failure
+from backend.vpn import Portal, Tunnel, ensure_wireproxy, extract_wireguard_config, wireproxy_config, wireproxy_failure, safe_wireproxy_output
 
 KEY = base64.b64encode(bytes(range(32))).decode()
 RAW = f'''[Interface]
@@ -67,6 +67,22 @@ class ConfigTests(unittest.TestCase):
         payload = base64.b64encode(('<plist><key>WgQuickConfig</key><string>' + RAW + '</string></plist>').encode()).decode()
         html = f'<a href="data:application/x-apple-aspen-config;base64,{payload}">download</a>'
         self.assertEqual(extract_wireguard_config(html), RAW.strip())
+
+    def test_runtime_diagnostic_preserves_linux_failure_but_redacts_keys(self):
+        hexkey = base64.b64decode(KEY).hex()
+        raw = f'private_key={hexkey}\nPublicKey: {KEY}\nPresharedKey={KEY}\nadding rule: open /dev/log: no such file or directory'
+        with self.assertLogs('backend.vpn', level='ERROR') as logs:
+            error = wireproxy_failure(raw, 'startup', 1)
+        combined = str(error) + ''.join(logs.output)
+        self.assertIn('filesystem Linux', combined)
+        self.assertIn('open /dev/log: no such file or directory', combined)
+        self.assertNotIn(KEY, combined)
+        self.assertNotIn(hexkey, combined)
+
+    def test_runtime_diagnostic_is_bounded_and_strips_terminal_escapes(self):
+        output = safe_wireproxy_output('\x1b[31mfailed\x1b[0m\n' + 'x' * 10000)
+        self.assertLessEqual(len(output), 1600)
+        self.assertNotIn('\x1b', output)
 
     def test_full_quota_does_not_delete_existing_configs(self):
         portal = Portal()

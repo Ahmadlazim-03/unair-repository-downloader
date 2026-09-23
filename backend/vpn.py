@@ -261,11 +261,28 @@ def ensure_wireproxy():
     return None
 
 
+def safe_wireproxy_output(output):
+    # Wireproxy receives VPN keys, never the user's login credentials. Remove both
+    # WireGuard encodings plus whole key/password field values before logging stderr.
+    output = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", output)
+    output = re.sub(r"(?im)(\b(?:private[_ ]?key|preshared[_ ]?key|public[_ ]?key|password|userpass)\s*[:=]).*$", r"\1 [REDACTED]", output)
+    output = re.sub(r"(?im)((?:invalid (?:base64 string|key)|key should be \d+ bytes)\s*:).*$", r"\1 [REDACTED]", output)
+    output = re.sub(r"[A-Za-z0-9+/]{43}=", "[REDACTED]", output)
+    output = re.sub(r"(?i)\b[0-9a-f]{64}\b", "[REDACTED]", output)
+    output = re.sub(r"[\x00-\x08\x0b-\x1f\x7f]", "", output)
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    # Keep the fatal tail rather than thousands of WireGuard debug messages.
+    return " | ".join(lines[-4:])[:1600] or "Proses tidak menulis detail ke stderr."
+
+
 def wireproxy_failure(output, stage, code=None):
-    # Classify stderr without exposing private keys, configuration lines or paths.
     lower = output.lower()
     reason = "Periksa profil VPN dan versi binary Wireproxy pada backend."
-    if "address already in use" in lower or "only one usage" in lower:
+    if "no such file or directory" in lower and ("landlock" in lower or "rule" in lower or "/dev/" in lower or "/proc/" in lower or "/etc/" in lower or "/usr/share/" in lower):
+        reason = "Wireproxy gagal menerapkan aturan filesystem Linux. Rebuild backend dengan binary terbaru yang disertakan proyek."
+    elif "landlock" in lower:
+        reason = "Aturan Landlock Wireproxy gagal diterapkan pada container. Periksa detail runtime dan versi image."
+    elif "address already in use" in lower or "only one usage" in lower:
         reason = "Port proxy sedang dipakai; coba ulang proses."
     elif "no such host" in lower or "name resolution" in lower or "lookup " in lower:
         reason = "DNS backend gagal menemukan endpoint VPN."
@@ -275,9 +292,12 @@ def wireproxy_failure(output, stage, code=None):
         reason = "Key WireGuard dari portal tidak valid."
     elif "permission denied" in lower or "operation not permitted" in lower:
         reason = "Platform backend menolak menjalankan Wireproxy atau membuka socket UDP."
+    elif "cannot allocate memory" in lower or "out of memory" in lower or "newosproc" in lower:
+        reason = "Resource memori atau thread backend tidak mencukupi."
     label = f"Wireproxy gagal saat {stage} (exit {code}). {reason}"
-    logger.error(label)
-    return UserError(label)
+    diagnostic = safe_wireproxy_output(output)
+    logger.error("%s Detail: %s", label, diagnostic)
+    return UserError(f"{label} Detail: {diagnostic}")
 
 
 class Tunnel:
