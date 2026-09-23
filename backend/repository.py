@@ -76,7 +76,6 @@ class Session:
                         req_headers.pop("Origin", None)
                     url = target
                     continue
-                print(f"[HTTP] {method} {url} -> {r.status_code}", flush=True)
                 if r.status_code in (401, 403):
                     raise UserError(f"Akses ditolak oleh kampus ({r.status_code}) saat mengakses {url}. Periksa akun dan hak akses dokumen.")
                 if r.status_code >= 400:

@@ -3,10 +3,9 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
-    cap_add: [NET_ADMIN]
-    # The Linux host must support the WireGuard kernel module.
     environment:
       VPN_MODE: portal
+      PORT: 8787
       APP_ACCESS_KEY: ${APP_ACCESS_KEY:?Set APP_ACCESS_KEY in .env (minimum 24 characters)}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:?Set exact Vercel frontend origin}
       JOB_TTL_SECONDS: ${JOB_TTL_SECONDS:-1800}
@@ -14,7 +13,6 @@ services:
       MAX_TOTAL_MB: ${MAX_TOTAL_MB:-250}
     ports: ["127.0.0.1:8787:8787"]
     tmpfs:
-      - /run:size=8m,mode=0700
       - /tmp:size=768m,mode=1777
     read_only: true
     mem_limit: 1536m

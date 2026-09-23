@@ -19,13 +19,13 @@ from pydantic import BaseModel, Field, SecretStr
 from starlette.background import BackgroundTask
 
 from .repository import Session, UserError, build_pdf, input_url, resolve_viewer
-from .vpn import Portal, Tunnel
+from .vpn import Portal, Tunnel, ensure_wireproxy
 
 MODE = os.getenv("VPN_MODE", "existing")
 ACCESS_KEY = os.getenv("APP_ACCESS_KEY", "")
 ORIGINS = [s.strip() for s in os.getenv("ALLOWED_ORIGINS", "http://127.0.0.1:5173,http://localhost:5173").split(",") if s.strip()]
 TTL = max(120, int(os.getenv("JOB_TTL_SECONDS", "1800")))
-OUTPUT_DIR = os.getenv("OUTPUT_DIR", str(Path(__file__).resolve().parent.parent))
+OUTPUT_DIR = os.getenv("OUTPUT_DIR", "")
 jobs = {}
 lock = threading.Lock()
 network_lock = threading.Lock()
@@ -149,7 +149,13 @@ class Submission(Credentials):
 
 @app.get("/health")
 def health():
-    return {"status": "ok" if network_healthy else "restart_required", "vpn_mode": MODE,
+    binary_available = bool(ensure_wireproxy()) if MODE == "portal" else None
+    state = "restart_required" if not network_healthy else "vpn_unavailable" if binary_available is False else "ok"
+    message = ("Backend perlu direstart karena tunnel sebelumnya belum bersih." if state == "restart_required" else
+               "Binary Wireproxy tidak tersedia. Rebuild image backend." if state == "vpn_unavailable" else "")
+    return {"status": state, "vpn_mode": MODE, "vpn_engine": "wireproxy" if MODE == "portal" else "existing",
+            "message": message,
+            "wireproxy_available": binary_available,
             "access_key_required": bool(ACCESS_KEY), "retention_seconds": TTL}
 
 
@@ -161,21 +167,25 @@ def profiles(data: Credentials):
         raise UserError("Isi kredensial VPN terlebih dahulu.")
     if not network_lock.acquire(blocking=False):
         raise HTTPException(409, "Backend sedang digunakan. Coba setelah proses selesai.")
-    portal = Portal()
+    portal = None
     try:
+        portal = Portal()
         return {"profiles": portal.login(data.username, data.password.get_secret_value())}
     except httpx.HTTPError:
         raise UserError("Portal VPN tidak dapat dihubungi dengan koneksi TLS yang valid.") from None
     finally:
-        portal.close()
+        data.password = SecretStr("")
+        if portal:
+            portal.close()
         network_lock.release()
 
 
 def run(job, data):
     global network_healthy
-    portal, tunnel, session, proxy_url = None, Tunnel(), None, None
+    portal, tunnel, session, proxy_url = None, None, None, None
     try:
         if MODE == "portal":
+            tunnel = Tunnel()
             job.update("vpn", "Login dan menghubungkan VPN kampus")
             portal = Portal()
             available = portal.login(data.vpn_username or data.username,
@@ -201,7 +211,8 @@ def run(job, data):
     except UserError as exc:
         job.update("cancelled" if job.cancel.is_set() else "error", str(exc))
     except httpx.HTTPError:
-        job.update("error", "Koneksi repository gagal. Periksa VPN, jaringan, dan sertifikat TLS backend.")
+        job.update("error", "Koneksi repository melalui VPN gagal. Periksa DNS, akses UDP keluar ke endpoint VPN, dan TLS backend." if proxy_url else
+                   "Koneksi repository gagal. Periksa VPN, jaringan, dan sertifikat TLS backend.")
     except Exception:
         job.update("error", "Proses gagal. Periksa konfigurasi backend dan format dokumen; tidak ada PDF parsial yang diterbitkan.")
     finally:
@@ -209,7 +220,7 @@ def run(job, data):
         data.vpn_password = SecretStr("")
         if session:
             session.close()
-        if not tunnel.close():
+        if tunnel and not tunnel.close():
             network_healthy = False
             job.warning = "Pembersihan tunnel gagal; backend harus direstart sebelum proses berikutnya."
         if portal:
@@ -244,11 +255,21 @@ def create_job(data: Submission):
             raise HTTPException(429, "Penyimpanan sementara penuh. Hapus hasil lama atau coba lagi nanti.")
     if not network_lock.acquire(blocking=False):
         raise HTTPException(409, "Satu dokumen sedang diproses. Coba lagi setelah selesai.")
-    job_id, token = secrets.token_urlsafe(18), secrets.token_urlsafe(32)
-    job = Job(token=token, directory=tempfile.TemporaryDirectory(prefix="arsip-job-"))
-    with lock:
-        jobs[job_id] = job
-    threading.Thread(target=run, args=(job, data), daemon=True).start()
+    job = None
+    job_id = secrets.token_urlsafe(18)
+    token = secrets.token_urlsafe(32)
+    try:
+        job = Job(token=token, directory=tempfile.TemporaryDirectory(prefix="arsip-job-"))
+        with lock:
+            jobs[job_id] = job
+        threading.Thread(target=run, args=(job, data), daemon=True).start()
+    except Exception:
+        with lock:
+            jobs.pop(job_id, None)
+        if job:
+            job.directory.cleanup()
+        network_lock.release()
+        raise HTTPException(503, "Backend tidak dapat menyiapkan proses. Coba lagi nanti.") from None
     return {"id": job_id, "token": token, "expires_at": job.created + TTL}
 
 

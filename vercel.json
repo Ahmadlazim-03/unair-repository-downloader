@@ -1,5 +1,5 @@
 {
-  "buildCommand": "npm run build",
+  "buildCommand": "VITE_API_URL=https://unairrepositorydownloader-d6x2bsd9.b4a.run npm run build",
   "outputDirectory": "dist",
   "framework": "vite",
   "headers": [{"source": "/(.*)", "headers": [

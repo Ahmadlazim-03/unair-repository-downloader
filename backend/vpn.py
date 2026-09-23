@@ -1,6 +1,7 @@
 """Official eduVPN manual-configuration flow; one isolated worker, one job at a time."""
 import base64
 import configparser
+import logging
 import ipaddress
 import os
 import platform
@@ -10,13 +11,17 @@ import socket
 import subprocess
 import tempfile
 import time
+import threading
 import uuid
+from collections import deque
 from pathlib import Path
 from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
 
 from .repository import Session, UserError, VPN, hidden_fields
+
+logger = logging.getLogger(__name__)
 
 
 def extract_wireguard_config(text: str) -> str:
@@ -87,18 +92,6 @@ class Portal:
                                         "Sec-Fetch-User": "?1",
                                     })
 
-    def _delete_stale(self, soup, page):
-        deleted = False
-        for row in soup.select("tr"):
-            if "arsip" in row.get_text().lower():
-                form = row.select_one("form")
-                if form:
-                    target_action = form.get("action")
-                    target_url = urljoin(page, target_action) if target_action else page
-                    self.post(target_url, hidden_fields(form))
-                    deleted = True
-        return deleted
-
     def login(self, username, password):
         soup, page = self.session.html(VPN)
         field = soup.select_one('input[name="userName"]')
@@ -113,10 +106,6 @@ class Portal:
             raise UserError("Login VPN gagal. Periksa username dan password kampus.")
         form_select = soup.select_one('select[name="profileId"]')
         if not form_select:
-            if self._delete_stale(soup, page):
-                soup, page = self.session.html(VPN + "home")
-                form_select = soup.select_one('select[name="profileId"]')
-        if not form_select:
             raise UserError("Portal tidak menyediakan konfigurasi manual untuk akun ini, atau kuota konfigurasi penuh. Hapus konfigurasi lama di portal eduVPN.")
         return [{"id": o.get("value", ""), "name": o.get_text(" ", strip=True)}
                 for o in form_select.select("option[value]")]
@@ -124,10 +113,6 @@ class Portal:
     def create(self, profile_id):
         soup, page = self.session.html(VPN + "home")
         select = soup.select_one('select[name="profileId"]')
-        if select is None:
-            if self._delete_stale(soup, page):
-                soup, page = self.session.html(VPN + "home")
-                select = soup.select_one('select[name="profileId"]')
         if select is None or profile_id not in [x.get("value") for x in select.select("option")]:
             raise UserError("Profil VPN tidak tersedia untuk akun ini.")
         form = select.find_parent("form")
@@ -149,7 +134,7 @@ class Portal:
                 if not soup.select_one('input[name="userPass"]'):
                     for row in soup.select("tr"):
                         # Exact generated label only; never delete another client's configuration.
-                        if any(x.get("title") == self.name or x.get_text(strip=True) == self.name or self.name in x.get_text()
+                        if any(x.get("title") == self.name or x.get_text(strip=True) == self.name
                                for x in row.select("span, td")):
                             form = row.select_one("form")
                             if form:
@@ -158,7 +143,7 @@ class Portal:
                                 self.post(target_url, hidden_fields(form))
                                 break
         except Exception as exc:
-            warning = f"Pembersihan sesi VPN belum terkonfirmasi ({exc}). Periksa konfigurasi {self.name} di portal eduVPN."
+            warning = f"Pembersihan sesi VPN belum terkonfirmasi. Periksa konfigurasi {self.name} di portal eduVPN."
         try:
             self.post(VPN + "_logout", {})
         except Exception:
@@ -180,10 +165,10 @@ def sanitized_config(raw, repository_ips):
         key = interface["PrivateKey"].strip()
         pubkey = peer["PublicKey"].strip()
         if not all(re.fullmatch(r"[A-Za-z0-9+/]{43}=", k) for k in (key, pubkey)):
-            raise ValueError(f"invalid wireguard key: key={key!r} pubkey={pubkey!r}")
+            raise ValueError("invalid wireguard key")
         psk = peer.get("PresharedKey", "").strip()
         if psk and not re.fullmatch(r"[A-Za-z0-9+/]{43}=", psk):
-            raise ValueError(f"invalid preshared key: psk={psk!r}")
+            raise ValueError("invalid preshared key")
         psk_line = f"PresharedKey = {psk}\n" if psk else ""
         addresses = [str(ipaddress.ip_interface(x.strip())) for x in interface["Address"].split(",")
                      if ipaddress.ip_interface(x.strip()).version == 4]
@@ -196,8 +181,8 @@ def sanitized_config(raw, repository_ips):
         return (f"[Interface]\nPrivateKey = {key}\nAddress = {','.join(addresses)}\nTable = off\n"
                 f"[Peer]\nPublicKey = {pubkey}\n{psk_line}AllowedIPs = {','.join(ip + '/32' for ip in repository_ips)}\n"
                 f"Endpoint = {endpoint}\nPersistentKeepalive = 25\n")
-    except (KeyError, ValueError, configparser.Error) as err:
-        raise UserError(f"Konfigurasi WireGuard dari portal tidak didukung: {err}") from None
+    except (KeyError, ValueError, configparser.Error):
+        raise UserError("Konfigurasi WireGuard dari portal tidak valid; periksa profil VPN.") from None
 
 
 def wireproxy_config(raw, bind_port=1080):
@@ -207,55 +192,73 @@ def wireproxy_config(raw, bind_port=1080):
         interface, peer = parser["Interface"], parser["Peer"]
         key = interface["PrivateKey"].strip()
         pubkey = peer["PublicKey"].strip()
-        if not all(re.fullmatch(r"[A-Za-z0-9+/]{43}=", k) for k in (key, pubkey)):
-            raise ValueError(f"invalid wireguard key: key={key!r} pubkey={pubkey!r}")
-        psk = peer.get("PresharedKey", "").strip()
-        if psk and not re.fullmatch(r"[A-Za-z0-9+/]{43}=", psk):
-            raise ValueError(f"invalid preshared key: psk={psk!r}")
-        psk_line = f"PresharedKey = {psk}\n" if psk else ""
-        addresses = [str(ipaddress.ip_interface(x.strip())) for x in interface["Address"].split(",")
-                     if ipaddress.ip_interface(x.strip()).version == 4]
+        if not all(len(base64.b64decode(k, validate=True)) == 32 for k in (key, pubkey)):
+            raise ValueError("invalid wireguard key")
+        psk = peer.get("PresharedKey", "").strip() or peer.get("PreSharedKey", "").strip()
+        if psk and len(base64.b64decode(psk, validate=True)) != 32:
+            raise ValueError("invalid preshared key")
+        psk_line = f"PreSharedKey = {psk}\n" if psk else ""
+        addresses = [str(ipaddress.ip_interface(x.strip())) for x in interface["Address"].split(",")]
         if not addresses:
             raise ValueError("address")
         endpoint = peer["Endpoint"].strip()
-        if not re.fullmatch(r"[A-Za-z0-9.-]+:\d{1,5}", endpoint):
-            raise ValueError(f"invalid endpoint: {endpoint!r}")
-        dns = interface.get("DNS", "1.1.1.1").strip()
-        return (f"[Interface]\nPrivateKey = {key}\nAddress = {','.join(addresses)}\nDNS = {dns}\n\n"
-                f"[Peer]\nPublicKey = {pubkey}\n{psk_line}Endpoint = {endpoint}\nAllowedIPs = 0.0.0.0/0\n"
+        host, port = endpoint.rsplit(":", 1)
+        if not 1 <= int(port) <= 65535:
+            raise ValueError("endpoint port")
+        if host.startswith("[") and host.endswith("]"):
+            ipaddress.IPv6Address(host[1:-1])
+        elif not re.fullmatch(r"[A-Za-z0-9.-]+", host):
+            raise ValueError("endpoint host")
+        dns_ips = []
+        for x in interface.get("DNS", "1.1.1.1").split(","):
+            x = x.strip()
+            try:
+                ipaddress.ip_address(x)
+                dns_ips.append(x)
+            except ValueError:
+                pass
+        dns = ", ".join(dns_ips) if dns_ips else "1.1.1.1"
+        allowed = [str(ipaddress.ip_network(x.strip(), strict=False))
+                   for x in peer.get("AllowedIPs", "0.0.0.0/0,::/0").split(",")]
+        mtu = int(interface.get("MTU", "1420"))
+        if not 1280 <= mtu <= 9000 or not 1 <= bind_port <= 65535:
+            raise ValueError("MTU or proxy port")
+        return (f"[Interface]\nPrivateKey = {key}\nAddress = {','.join(addresses)}\nDNS = {dns}\nMTU = {mtu}\n\n"
+                f"[Peer]\nPublicKey = {pubkey}\n{psk_line}Endpoint = {endpoint}\nAllowedIPs = {','.join(allowed)}\n"
                 f"PersistentKeepalive = 25\n\n"
                 f"[Socks5]\nBindAddress = 127.0.0.1:{bind_port}\n")
-    except (KeyError, ValueError, configparser.Error) as err:
-        raise UserError(f"Konfigurasi WireGuard dari portal tidak didukung: {err}") from None
+    except (KeyError, ValueError, configparser.Error):
+        raise UserError("Konfigurasi WireGuard dari portal tidak valid; periksa alamat, key, endpoint, dan profil VPN.") from None
 
 
 def ensure_wireproxy():
+    explicit = os.getenv("WIREPROXY_BIN")
+    if explicit:
+        path = Path(explicit)
+        return str(path.resolve()) if path.is_file() else None
     cmd = shutil.which("wireproxy")
     if cmd:
         return cmd
-    tmp_bin = Path(tempfile.gettempdir()) / ("wireproxy.exe" if platform.system() == "Windows" else "wireproxy")
-    if tmp_bin.is_file() and (platform.system() == "Windows" or os.access(tmp_bin, os.X_OK)):
-        return str(tmp_bin)
-    if platform.system() != "Linux":
-        return None
-    import tarfile
-    import urllib.request
-    url = "https://github.com/pufferffish/wireproxy/releases/download/v1.0.8/wireproxy_linux_amd64.tar.gz"
-    tar_path = Path(tempfile.gettempdir()) / "wireproxy.tar.gz"
-    try:
-        urllib.request.urlretrieve(url, tar_path)
-        with tarfile.open(tar_path, "r:gz") as tar:
-            for member in tar.getmembers():
-                if member.name.endswith("wireproxy"):
-                    f = tar.extractfile(member)
-                    if f:
-                        tmp_bin.write_bytes(f.read())
-                        tmp_bin.chmod(0o755)
-                        break
-        tar_path.unlink(missing_ok=True)
-        return str(tmp_bin) if tmp_bin.is_file() else None
-    except Exception:
-        return None
+    return None
+
+
+def wireproxy_failure(output, stage, code=None):
+    # Classify stderr without exposing private keys, configuration lines or paths.
+    lower = output.lower()
+    reason = "Periksa profil VPN dan versi binary Wireproxy pada backend."
+    if "address already in use" in lower or "only one usage" in lower:
+        reason = "Port proxy sedang dipakai; coba ulang proses."
+    elif "no such host" in lower or "name resolution" in lower or "lookup " in lower:
+        reason = "DNS backend gagal menemukan endpoint VPN."
+    elif "parseaddr" in lower or "parseprefix" in lower or "invalid ip" in lower:
+        reason = "Alamat IP atau DNS konfigurasi VPN tidak didukung."
+    elif "invalid key" in lower or "key should" in lower or "base64" in lower:
+        reason = "Key WireGuard dari portal tidak valid."
+    elif "permission denied" in lower or "operation not permitted" in lower:
+        reason = "Platform backend menolak menjalankan Wireproxy atau membuka socket UDP."
+    label = f"Wireproxy gagal saat {stage} (exit {code}). {reason}"
+    logger.error(label)
+    return UserError(label)
 
 
 class Tunnel:
@@ -265,8 +268,23 @@ class Tunnel:
         self.proc = None
         self.proxy_url = None
         self.wireproxy_bin = ensure_wireproxy()
-        self.mode = "wireproxy" if self.wireproxy_bin else "kernel"
+        self.mode = "wireproxy"
         self.started = False
+        self.output = deque(maxlen=32)
+        self.reader = None
+
+    def _read_output(self):
+        # Continuously drain the pipe so long downloads cannot deadlock Wireproxy.
+        try:
+            while chunk := self.proc.stdout.read(1024):
+                self.output.append(chunk)
+        except (OSError, ValueError):
+            pass
+
+    def _startup_error(self, stage):
+        if self.reader:
+            self.reader.join(timeout=1)
+        return wireproxy_failure("".join(self.output), stage, self.proc.returncode)
 
     @staticmethod
     def command(args):
@@ -277,24 +295,50 @@ class Tunnel:
 
     def start(self, config):
         if self.mode == "wireproxy":
-            port = 1080
+            if not self.wireproxy_bin:
+                raise UserError("Binary Wireproxy tidak tersedia. Rebuild image backend atau atur WIREPROXY_BIN.")
+            with socket.socket() as reservation:
+                reservation.bind(("127.0.0.1", 0))
+                port = reservation.getsockname()[1]
             content = wireproxy_config(config, bind_port=port)
             self.directory = tempfile.TemporaryDirectory(prefix="arsip-wp-")
             self.path = Path(self.directory.name) / "wireproxy.conf"
             self.path.write_text(content, encoding="utf-8")
-            self.proc = subprocess.Popen([self.wireproxy_bin, "-c", str(self.path)],
-                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            for _ in range(30):
-                if self.proc.poll() is not None:
-                    raise UserError("Wireproxy gagal dijalankan. Periksa konfigurasi WireGuard.")
-                try:
-                    with socket.create_connection(("127.0.0.1", port), timeout=0.2):
-                        break
-                except OSError:
+            self.path.chmod(0o600)
+            try:
+                check = subprocess.run([self.wireproxy_bin, "-n", "-c", str(self.path)],
+                                       capture_output=True, text=True, timeout=20)
+                if check.returncode:
+                    raise wireproxy_failure(check.stderr + check.stdout, "validasi konfigurasi", check.returncode)
+                self.proc = subprocess.Popen([self.wireproxy_bin, "-c", str(self.path)],
+                                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                             text=True, encoding="utf-8", errors="replace")
+                self.reader = threading.Thread(target=self._read_output, daemon=True)
+                self.reader.start()
+                deadline = time.monotonic() + 10
+                while time.monotonic() < deadline:
+                    if self.proc.poll() is not None:
+                        raise self._startup_error("startup")
+                    try:
+                        with socket.create_connection(("127.0.0.1", port), timeout=0.3) as connection:
+                            connection.sendall(b"\x05\x01\x00")
+                            reply = b""
+                            while len(reply) < 2:
+                                chunk = connection.recv(2 - len(reply))
+                                if not chunk:
+                                    break
+                                reply += chunk
+                            if reply == b"\x05\x00" and self.proc.poll() is None:
+                                break
+                    except OSError:
+                        pass
                     time.sleep(0.1)
-            else:
-                self.close()
-                raise UserError("Wireproxy timeout saat memulai proxy.")
+                else:
+                    raise UserError("Wireproxy timeout saat menyiapkan SOCKS5. Periksa resource backend.")
+            except subprocess.TimeoutExpired:
+                raise UserError("Validasi Wireproxy timeout. Periksa DNS endpoint VPN pada backend.") from None
+            except OSError as exc:
+                raise wireproxy_failure(str(exc), "eksekusi binary", exc.errno) from None
             self.started = True
             self.proxy_url = f"socks5://127.0.0.1:{port}"
             return self.proxy_url
@@ -323,11 +367,17 @@ class Tunnel:
         try:
             if self.mode == "wireproxy":
                 if self.proc:
-                    self.proc.terminate()
+                    if self.proc.poll() is None:
+                        self.proc.terminate()
                     try:
                         self.proc.wait(timeout=5)
                     except subprocess.TimeoutExpired:
                         self.proc.kill()
+                        self.proc.wait(timeout=5)
+                    if self.reader:
+                        self.reader.join(timeout=2)
+                    if self.proc.stdout:
+                        self.proc.stdout.close()
                     self.proc = None
             else:
                 if self.started and self.path:
@@ -336,6 +386,12 @@ class Tunnel:
             success = False
         finally:
             if self.directory:
-                self.directory.cleanup()
-                self.directory = None
+                try:
+                    self.directory.cleanup()
+                    self.directory = None
+                except OSError:
+                    success = False
+            self.output.clear()
+            self.started = False
+            self.proxy_url = None
         return success
