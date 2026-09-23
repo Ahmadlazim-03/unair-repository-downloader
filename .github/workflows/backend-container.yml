@@ -3,9 +3,9 @@ name: Backend Linux container
 on:
   push:
     branches: [main]
-    paths: ['backend/**', 'tests/**', 'Dockerfile', '.dockerignore', '.github/workflows/backend-container.yml']
+    paths: ['backend/**', 'src/**', 'tests/**', 'Dockerfile', '.dockerignore', 'package.json', 'package-lock.json', 'index.html', 'vite.config.ts', 'tsconfig.json', '.github/workflows/backend-container.yml']
   pull_request:
-    paths: ['backend/**', 'tests/**', 'Dockerfile', '.dockerignore', '.github/workflows/backend-container.yml']
+    paths: ['backend/**', 'src/**', 'tests/**', 'Dockerfile', '.dockerignore', 'package.json', 'package-lock.json', 'index.html', 'vite.config.ts', 'tsconfig.json', '.github/workflows/backend-container.yml']
   workflow_dispatch:
 
 permissions:

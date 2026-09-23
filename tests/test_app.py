@@ -40,8 +40,9 @@ class AppTests(unittest.TestCase):
         while time.monotonic() < deadline:
             response = self.client.get('/jobs/' + identity, headers=headers)
             self.assertEqual(response.status_code, 200)
-            if worker.jobs[identity].finished:
-                return response.json()
+            result = response.json()
+            if result['state'] in ('done', 'error', 'cancelled') and worker.jobs[identity].finished:
+                return result
             time.sleep(0.01)
         self.fail('Worker did not finish')
 

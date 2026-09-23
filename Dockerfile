@@ -1,3 +1,12 @@
+FROM node:22-bookworm-slim AS frontend
+
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY index.html tsconfig*.json vite.config.* ./
+COPY src ./src
+RUN npm run build
+
 FROM python:3.11-slim-bookworm
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -32,11 +41,12 @@ COPY --chown=user:user backend/requirements.txt ./backend/requirements.txt
 RUN pip install --no-cache-dir --user -r backend/requirements.txt
 
 COPY --chown=user:user backend ./backend
+COPY --from=frontend --chown=user:user /app/dist ./dist
 
 # Exercise Linux startup, including Landlock and SOCKS5, with throwaway keys.
 # --version and --configtest exit before this startup stage.
 RUN python -m backend.vpn_selftest
 
-EXPOSE 7860 8787
+EXPOSE 10000 7860 8787
 
 CMD ["sh", "-c", "python -m backend.vpn_selftest && exec python -m uvicorn backend.app:app --host 0.0.0.0 --port ${PORT:-7860} --no-access-log --timeout-graceful-shutdown 120"]

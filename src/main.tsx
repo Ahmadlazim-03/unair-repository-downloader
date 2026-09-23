@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { ArrowDownToLine, ArrowRight, BookOpen, Check, CheckCircle2, ChevronDown, CircleHelp, FileText, KeyRound, Link2, LoaderCircle, LockKeyhole, ShieldCheck, Trash2, Wifi, X } from 'lucide-react';
 import './style.css';
 
-const API = (import.meta.env.VITE_API_URL || 'https://unairrepositorydownloader-7859ib84.b4a.run').replace(/\/$/, '');
+const API = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
 type Health = {vpn_mode: string; access_key_required: boolean; retention_seconds: number; status: string; message?: string};
 type Ticket = {id: string; token: string; expires_at: number};
 type Progress = {state: string; message: string; current: number; total: number; warning?: string; result?: {pages: number; bytes: number; title: string}; expires_at: number};
@@ -51,7 +51,7 @@ function App() {
       setHealth(result);
       setHealthError(result.status === 'ok' ? '' : result.message || 'Backend belum siap. Periksa konfigurasi VPN server.');
     }
-    catch { setHealth(null); setHealthError('Backend belum terhubung. Jalankan backend atau periksa VITE_API_URL.'); }
+    catch { setHealth(null); setHealthError('Server belum terhubung. Muat ulang halaman atau coba beberapa saat lagi.'); }
   }
   useEffect(() => { void checkHealth(); const timer = setInterval(() => setNow(Date.now()), 15000); return () => clearInterval(timer); }, []);
   useEffect(() => {

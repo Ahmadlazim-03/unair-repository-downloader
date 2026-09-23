@@ -15,6 +15,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, SecretStr
 from starlette.background import BackgroundTask
 
@@ -88,6 +89,14 @@ app.add_middleware(CORSMiddleware, allow_origins=ORIGINS,
                    allow_methods=["GET", "POST", "DELETE"],
                    allow_headers=["Content-Type", "Authorization", "X-App-Key"],
                    expose_headers=["Content-Disposition"])
+
+WEB_DIR = Path(__file__).resolve().parent.parent / "dist"
+app.mount("/assets", StaticFiles(directory=WEB_DIR / "assets", check_dir=False), name="assets")
+
+
+@app.get("/", include_in_schema=False)
+def homepage():
+    return FileResponse(WEB_DIR / "index.html", media_type="text/html")
 
 
 @app.middleware("http")
