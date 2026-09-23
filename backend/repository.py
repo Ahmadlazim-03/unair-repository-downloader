@@ -76,10 +76,11 @@ class Session:
                         req_headers.pop("Origin", None)
                     url = target
                     continue
+                print(f"[HTTP] {method} {url} -> {r.status_code}", flush=True)
                 if r.status_code in (401, 403):
-                    raise UserError("Akses ditolak oleh kampus. Periksa akun dan hak akses dokumen.")
+                    raise UserError(f"Akses ditolak oleh kampus ({r.status_code}) saat mengakses {url}. Periksa akun dan hak akses dokumen.")
                 if r.status_code >= 400:
-                    raise UserError(f"Repository mengembalikan HTTP {r.status_code}; proses dihentikan.")
+                    raise UserError(f"Repository mengembalikan HTTP {r.status_code} saat mengakses {url}; proses dihentikan.")
                 chunks, size = [], 0
                 for chunk in r.iter_bytes():
                     size += len(chunk)
@@ -129,14 +130,17 @@ def resolve_viewer(session, url, username, password):
             raise UserError("Detail katalog memerlukan login. Isi NIM dan password repository.")
         csrf = soup.select_one('meta[name="csrf-token"]')
         headers = {"X-CSRF-Token": csrf.get("content", "")} if csrf else {}
-        body, _, _ = session.request("POST", REPO + "/opac/site/login", headers=headers)
-        form = BeautifulSoup(body, "html.parser").select_one("form#login-anggota")
+        form = soup.select_one("form#login-anggota")
+        if form is None:
+            body, _, _ = session.get(REPO + "/opac/site/login", headers=headers)
+            form = BeautifulSoup(body, "html.parser").select_one("form#login-anggota")
         if form is None:
             raise UserError("Form login repository berubah atau VPN belum terhubung.")
         fields = hidden_fields(form)
         fields.update({"LoginKeanggotaanForm[noanggota]": username,
                        "LoginKeanggotaanForm[password]": password})
-        session.request("POST", REPO + "/opac/site/loginanggota", data=fields, headers=headers)
+        action = form.get("action") or "/opac/site/loginanggota"
+        session.request("POST", urljoin(REPO, action), data=fields, headers=headers)
         soup, final = session.html(url)
         links = viewer_links(soup, final)
         if not links:
