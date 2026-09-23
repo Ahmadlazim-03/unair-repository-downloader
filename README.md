@@ -1,54 +1,51 @@
-# Arsip — UNAIR Repository to PDF (Client-Side)
+# Arsip — UNAIR Repository to PDF
 
-Web berbahasa Indonesia untuk menyusun halaman pembaca repository UNAIR menjadi satu PDF. **100% berjalan di browser** — tanpa server backend.
+Web all-in-one untuk menyusun halaman pembaca repository UNAIR menjadi satu PDF. **Tanpa instal aplikasi VPN** — semua ditangani server.
 
-## Cara Kerja
+## Arsitektur
 
 ```text
-Browser pengguna (VPN aktif)
-  ├─ Fetch halaman detail / viewer dari ir.unair.ac.id
-  ├─ Parse konfigurasi FlipHTML5 (jumlah halaman, path gambar)
-  ├─ Download semua gambar halaman secara berurutan
-  └─ Rakit menjadi PDF via jsPDF di memori browser → download
+Browser → React/Vite di Vercel → FastAPI di Google Cloud Run
+                               ├─ login portal eduVPN otomatis (wireproxy)
+                               ├─ login OPAC dan akses halaman
+                               └─ validasi semua gambar → PDF → unduhan
 ```
 
-**Prasyarat pengguna**: Hubungkan eduVPN kampus di perangkat Anda sebelum membuka web ini.
+User cukup buka web, isi URL + kredensial kampus, klik Buat PDF. Server menangani VPN, download, dan penyusunan PDF.
 
-## Deploy ke Vercel
+## Deploy
 
-1. Push repository ke GitHub.
-2. Import di [vercel.com/new](https://vercel.com/new). Framework: Vite.
-3. Deploy. Tidak perlu environment variable apapun.
-4. Bagikan URL Vercel ke teman-teman Anda.
+### Frontend (Vercel)
+1. Import repository di Vercel. Framework: Vite.
+2. Atur `VITE_API_URL=https://backend-url.run.app`.
+3. Deploy.
 
-## Menjalankan Lokal
-
+### Backend (Google Cloud Run)
 ```bash
-npm install
-npm run dev
+gcloud run deploy unair-backend \
+  --source . \
+  --region us-central1 \
+  --allow-unauthenticated \
+  --memory 512Mi \
+  --cpu 1 \
+  --min-instances 0 \
+  --max-instances 1 \
+  --timeout 300 \
+  --set-env-vars "VPN_MODE=portal,ALLOWED_ORIGINS=https://your-vercel-url.vercel.app,APP_ACCESS_KEY=kuncirahasia123"
 ```
 
-Buka **http://127.0.0.1:5173**. Pastikan eduVPN aktif di perangkat Anda.
+### Lokal (Windows)
+Prasyarat: Node.js 22+, Python 3.11+, VPN UNAIR aktif.
 
-## Keamanan & Privasi
+```powershell
+.\scripts\install.ps1
+.\scripts\start-local.ps1
+```
 
-- **100% client-side**: tidak ada data yang dikirim ke server selain ir.unair.ac.id.
-- Tidak ada kredensial yang diminta — akses dokumen bergantung pada koneksi VPN pengguna.
-- PDF dihasilkan di memori browser; tidak disimpan di server manapun.
-- URL dibatasi ke domain `ir.unair.ac.id` saja.
+## Keamanan
+- Kredensial hanya dipakai dalam memori untuk login, tidak disimpan ke disk/database.
+- URL dibatasi ke `ir.unair.ac.id` dan `eduvpn.unair.ac.id`.
+- Hasil otomatis dihapus setelah 30 menit.
+- PDF gambar, bukan PDF asli.
 
-## Batasan
-
-- Output adalah **PDF gambar**, bukan PDF asli atau OCR.
-- Browser harus terhubung ke jaringan UNAIR via eduVPN.
-- Dokumen yang memerlukan login repository (NIM/password) mungkin tidak dapat diakses langsung dari browser karena CORS. Gunakan URL viewer `index.html` langsung jika tersedia.
-- Maksimum 500 halaman per dokumen.
-
-## Teknologi
-
-- React 19 + Vite + TypeScript
-- jsPDF (client-side PDF generation)
-- Lucide React (icons)
-- Deploy: Vercel (static site)
-
-Proyek independen, tidak berafiliasi dengan UNAIR. Gunakan hanya untuk dokumen yang berhak Anda akses.
+Proyek independen, tidak berafiliasi dengan UNAIR.
