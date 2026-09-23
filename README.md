@@ -39,7 +39,11 @@ Prasyarat: Node.js 22+, Python 3.11+, VPN UNAIR aktif.
 
 ## Pemeriksaan dan perbaikan Wireproxy
 
-Versi ini ditandai dengan `"revision":"wireproxy-runtime-3"` dan `"wireproxy_version":"1.1.3"` pada `/health`. Jika field ini belum muncul, Back4App masih memakai build lama: periksa repository/branch `main`, aktifkan Auto Deploy atau jalankan redeploy dari commit terbaru. Deployment Vercel tidak memperbarui container Back4App.
+Versi ini ditandai dengan `"revision":"repository-tls-4"` dan `"wireproxy_version":"1.1.3"` pada `/health`. Jika field ini belum muncul, Back4App masih memakai build lama: periksa repository/branch `main`, aktifkan Auto Deploy atau jalankan redeploy dari commit terbaru. Deployment Vercel tidak memperbarui container Back4App.
+
+Uji langsung 2026-09-23 menemukan rantai HTTPS repository yang tidak cocok: leaf `*.unair.ac.id` diterbitkan Sectigo DV R36, tetapi server mengirim intermediate lama. Aplikasi melengkapi issuer R36 resmi, menggunakan root certifi, dan tetap memverifikasi hostname, tanggal, serta rantai lengkap ke root terpercaya. Detail sumber dan hash ada di `backend/certs/README.md`. Endpoint login modal INLISLite juga diarahkan ke `/opac/site/loginanggota`, sesuai alur AJAX situs. Profil TCP yang membutuhkan ProxyGuard tidak ditawarkan sebagai profil Wireproxy UDP.
+
+Untuk memeriksa produksi secara nyata, gunakan `scripts/check-production.py --url URL_KATALOG --expected-pages 93` dengan Python dari `.venv`. Skrip meminta kredensial tanpa menampilkannya, login ke backend, menunggu PDF, memverifikasi jumlah/gambar setiap halaman dan cleanup, menyimpan PDF serta laporan tanpa kredensial di `.runtime`, lalu menghapus hasil uji dari server. Parameter jumlah halaman harus sesuai dokumen yang diuji.
 
 Wireproxy 1.0.8 menerapkan aturan Landlock saat startup Linux yang dapat gagal jika path seperti `/dev/log` tidak ada pada image minimal. Pemeriksaan `--version` dan `--configtest` tidak menjalankan tahap tersebut. Rilis 1.1.3 memakai `IgnoreIfMissing()` pada aturan path tersebut ([kode upstream](https://github.com/windtf/wireproxy/blob/v1.1.3/cmd/wireproxy/main.go)); isolasi container dan Landlock tetap aktif.
 

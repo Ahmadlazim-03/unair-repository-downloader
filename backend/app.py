@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field, SecretStr
 from starlette.background import BackgroundTask
 
-from .repository import Session, UserError, build_pdf, input_url, resolve_viewer
+from .repository import Session, UserError, build_pdf, input_url, resolve_viewer, connection_error
 from .vpn import Portal, Tunnel, ensure_wireproxy
 
 MODE = os.getenv("VPN_MODE", "existing")
@@ -153,7 +153,7 @@ def health():
     state = "restart_required" if not network_healthy else "vpn_unavailable" if binary_available is False else "ok"
     message = ("Backend perlu direstart karena tunnel sebelumnya belum bersih." if state == "restart_required" else
                "Binary Wireproxy tidak tersedia. Rebuild image backend." if state == "vpn_unavailable" else "")
-    return {"status": state, "revision": "wireproxy-runtime-3", "vpn_mode": MODE, "vpn_engine": "wireproxy" if MODE == "portal" else "existing",
+    return {"status": state, "revision": "repository-tls-4", "vpn_mode": MODE, "vpn_engine": "wireproxy" if MODE == "portal" else "existing",
             "wireproxy_version": os.getenv("WIREPROXY_VERSION", "unknown") if MODE == "portal" else None,
             "message": message,
             "wireproxy_available": binary_available,
@@ -211,9 +211,8 @@ def run(job, data):
         job.update("cleanup", "Menutup koneksi dan membersihkan sesi")
     except UserError as exc:
         job.update("cancelled" if job.cancel.is_set() else "error", str(exc))
-    except httpx.HTTPError:
-        job.update("error", "Koneksi repository melalui VPN gagal. Periksa DNS, akses UDP keluar ke endpoint VPN, dan TLS backend." if proxy_url else
-                   "Koneksi repository gagal. Periksa VPN, jaringan, dan sertifikat TLS backend.")
+    except httpx.HTTPError as exc:
+        job.update("error", connection_error(exc, via_vpn=bool(proxy_url)))
     except Exception:
         job.update("error", "Proses gagal. Periksa konfigurasi backend dan format dokumen; tidak ada PDF parsial yang diterbitkan.")
     finally:

@@ -107,10 +107,16 @@ class Portal:
         form_select = soup.select_one('select[name="profileId"]')
         if not form_select:
             raise UserError("Portal tidak menyediakan konfigurasi manual untuk akun ini, atau kuota konfigurasi penuh. Hapus konfigurasi lama di portal eduVPN.")
-        return [{"id": o.get("value", ""), "name": o.get_text(" ", strip=True)}
-                for o in form_select.select("option[value]")]
+        profiles = [{"id": o.get("value", ""), "name": o.get_text(" ", strip=True)}
+                    for o in form_select.select("option[value]")
+                    if not o.get("value", "").endswith("+tcp")]
+        if not profiles:
+            raise UserError("Portal hanya menyediakan profil TCP yang memerlukan ProxyGuard; backend ini mendukung WireGuard UDP.")
+        return profiles
 
     def create(self, profile_id):
+        if profile_id.endswith("+tcp"):
+            raise UserError("Profil WireGuard TCP memerlukan ProxyGuard. Gunakan profil WireGuard UDP.")
         soup, page = self.session.html(VPN + "home")
         select = soup.select_one('select[name="profileId"]')
         if select is None or profile_id not in [x.get("value") for x in select.select("option")]:

@@ -94,6 +94,16 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(post.call_count, 1)  # Login only, never delete another config.
         portal.session.close()
 
+    def test_only_supported_udp_profile_is_offered(self):
+        portal = Portal()
+        login = BeautifulSoup('<form><input name="userName"></form>', 'html.parser')
+        home = BeautifulSoup('<select name="profileId"><option value="campus+udp">UDP</option><option value="campus+tcp">TCP</option></select>', 'html.parser')
+        with patch.object(portal.session, 'html', side_effect=[(login, 'https://eduvpn.unair.ac.id/'), (home, 'https://eduvpn.unair.ac.id/')]), patch.object(portal, 'post'):
+            self.assertEqual(portal.login('fixture', 'fixture'), [{'id': 'campus+udp', 'name': 'UDP'}])
+        with self.assertRaisesRegex(UserError, 'ProxyGuard'):
+            portal.create('campus+tcp')
+        portal.session.close()
+
     def test_binary_is_required_without_runtime_download(self):
         with patch('backend.vpn.ensure_wireproxy', return_value=None):
             tunnel = Tunnel()

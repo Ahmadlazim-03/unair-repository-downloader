@@ -7,12 +7,42 @@ from pathlib import Path
 from urllib.parse import urljoin, urlsplit, unquote
 
 import httpx
+import certifi
 import pymupdf
 from bs4 import BeautifulSoup
 from PIL import Image
 
 REPO = "https://ir.unair.ac.id"
 VPN = "https://eduvpn.unair.ac.id/vpn-user-portal/"
+
+
+def tls_context(host):
+    context = ssl.create_default_context(cafile=certifi.where())
+    if host == "ir.unair.ac.id":
+        # The repository serves an unrelated older intermediate certificate.
+        # Supply the actual public issuer; still require a complete trusted-root
+        # chain, valid dates, and matching hostname (never allow partial chains).
+        context.load_verify_locations(cafile=str(Path(__file__).parent / "certs" / "sectigo-dv-r36.pem"))
+    context.verify_flags &= ~ssl.VERIFY_X509_PARTIAL_CHAIN
+    return context
+
+
+def connection_error(exc, via_vpn=False):
+    stage = "repository melalui VPN" if via_vpn else "layanan kampus"
+    cause = exc
+    while cause is not None:
+        if isinstance(cause, ssl.SSLCertVerificationError):
+            return f"Verifikasi sertifikat HTTPS {stage} gagal: {cause.verify_message}."
+        cause = cause.__cause__
+    if "CERTIFICATE_VERIFY_FAILED" in str(exc):
+        return f"Verifikasi sertifikat HTTPS {stage} gagal. Periksa rantai sertifikat dan waktu server."
+    if isinstance(exc, httpx.ProxyError):
+        return "Proxy VPN menolak koneksi repository. Periksa handshake VPN, DNS dan rute profil."
+    if isinstance(exc, httpx.ConnectTimeout):
+        return f"Koneksi ke {stage} timeout sebelum HTTPS tersambung."
+    if isinstance(exc, httpx.ReadTimeout):
+        return f"Respons {stage} timeout setelah koneksi dibuka."
+    return f"Koneksi {stage} gagal ({type(exc).__name__})."
 
 
 class UserError(Exception):
@@ -56,7 +86,7 @@ class Session:
             "Sec-Fetch-User": "?1",
             "Upgrade-Insecure-Requests": "1",
         }
-        self.client = httpx.Client(verify=ssl.create_default_context(), timeout=30,
+        self.client = httpx.Client(verify=tls_context(host), timeout=30,
                                   follow_redirects=False, transport=transport, proxy=proxy,
                                   headers=headers)
 
@@ -140,8 +170,13 @@ def resolve_viewer(session, url, username, password):
         fields = hidden_fields(form)
         fields.update({"LoginKeanggotaanForm[noanggota]": username,
                        "LoginKeanggotaanForm[password]": password})
-        action = form.get("action") or "/opac/site/loginanggota"
-        session.request("POST", urljoin(REPO, action), data=fields, headers=headers)
+        action = safe_url(urljoin(REPO, form.get("action") or "/opac/site/loginanggota"))
+        # INLISLite's modal action renders the form; the site's JavaScript submits
+        # credentials to loginanggota. Posting to /site/login only redisplays it.
+        if urlsplit(action).path == "/opac/site/login":
+            action = REPO + "/opac/site/loginanggota"
+        headers["X-Requested-With"] = "XMLHttpRequest"
+        session.request("POST", action, data=fields, headers=headers)
         soup, final = session.html(url)
         links = viewer_links(soup, final)
         if not links:

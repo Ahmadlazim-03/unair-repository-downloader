@@ -94,7 +94,7 @@ class RepositoryTests(unittest.TestCase):
                 submitted.append(req.content.decode())
                 return httpx.Response(200,headers={'set-cookie':'authenticated=yes; Path=/'},text='')
             if req.url.path.endswith('/site/login'):
-                return httpx.Response(200,text='<form id="login-anggota"><input type="hidden" name="csrf" value="fixture-token"></form>')
+                return httpx.Response(200,text='<form id="login-anggota" action="/opac/site/login"><input type="hidden" name="csrf" value="fixture-token"></form>')
             if 'authenticated=yes' in req.headers.get('cookie',''):
                 return httpx.Response(200,text=f'<a href="{BASE}">Baca Online</a>')
             return httpx.Response(200,text='<title>Katalog</title>')
