@@ -26,7 +26,14 @@ class Portal:
 
     def post(self, url, fields):
         return self.session.request("POST", url, data=fields,
-                                    headers={"Referer": VPN, "Origin": "https://eduvpn.unair.ac.id"})
+                                    headers={
+                                        "Referer": VPN,
+                                        "Origin": "https://eduvpn.unair.ac.id",
+                                        "Sec-Fetch-Dest": "document",
+                                        "Sec-Fetch-Mode": "navigate",
+                                        "Sec-Fetch-Site": "same-origin",
+                                        "Sec-Fetch-User": "?1",
+                                    })
 
     def login(self, username, password):
         soup, page = self.session.html(VPN)

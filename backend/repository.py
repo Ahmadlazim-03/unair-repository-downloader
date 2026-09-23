@@ -46,22 +46,34 @@ def hidden_fields(form) -> dict:
 class Session:
     def __init__(self, host="ir.unair.ac.id", transport=None, proxy=None):
         self.host = host
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "id,en-US;q=0.9,en;q=0.8",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "same-origin",
+            "Sec-Fetch-User": "?1",
+            "Upgrade-Insecure-Requests": "1",
+        }
         self.client = httpx.Client(verify=ssl.create_default_context(), timeout=30,
                                   follow_redirects=False, transport=transport, proxy=proxy,
-                                  headers={"User-Agent": "ArsipRepository/0.1"})
+                                  headers=headers)
 
     def close(self):
         self.client.close()
 
     def request(self, method, url, *, data=None, headers=None, limit=6_000_000):
+        req_headers = dict(headers or {})
         for _ in range(6):
             safe_url(url, self.host)
-            with self.client.stream(method, url, data=data, headers=headers) as r:
+            with self.client.stream(method, url, data=data, headers=req_headers) as r:
                 if r.is_redirect:
                     target = urljoin(url, r.headers.get("location", ""))
                     safe_url(target, self.host)  # validate BEFORE forwarding cookies or form data
                     if r.status_code == 303 or (r.status_code in (301, 302) and method == "POST"):
                         method, data = "GET", None
+                        req_headers.pop("Origin", None)
                     url = target
                     continue
                 if r.status_code in (401, 403):
