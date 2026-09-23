@@ -92,6 +92,14 @@ class Session:
     def get(self, url, **kwargs):
         return self.request("GET", url, **kwargs)
 
+    def get_optional(self, url, **kwargs):
+        try:
+            return self.get(url, **kwargs)
+        except UserError as e:
+            if "HTTP 404" in str(e):
+                return None, None, None
+            raise
+
     def html(self, url):
         body, final, _ = self.get(url)
         return BeautifulSoup(body, "html.parser"), final
@@ -146,18 +154,59 @@ def parse_config(source: str, maximum: int):
     count = int(counts[-1])
     if not 1 <= count <= maximum:
         raise UserError(f"Jumlah halaman di luar batas 1–{maximum} halaman.")
-    paths = re.findall(r'''bookConfig\.normalPath\s*=\s*["']([^"']+)["']''', source)
+    paths = re.findall(r'''bookConfig\.(?:normalPath|largePath)\s*=\s*["']([^"']+)["']''', source)
     path = paths[-1] if paths else "files/mobile/"
     if not re.fullmatch(r"files/[A-Za-z0-9_/-]+/", path) or ".." in path:
         raise UserError("Lokasi gambar pembaca tidak didukung.")
     return count, path
 
 
+def find_config(session, viewer, base, maximum):
+    # 1. Direct from viewer (index.html) or referenced scripts
+    body, _, _ = session.get_optional(viewer)
+    if body:
+        text = body.decode("utf-8", errors="replace")
+        try:
+            return parse_config(text, maximum)
+        except UserError:
+            pass
+        soup = BeautifulSoup(body, "html.parser")
+        for s in soup.select("script[src]"):
+            src = s.get("src", "")
+            if "config.js" in src:
+                c_body, _, _ = session.get_optional(urljoin(base, src))
+                if c_body:
+                    try:
+                        return parse_config(c_body.decode("utf-8", errors="replace"), maximum)
+                    except UserError:
+                        pass
+
+    # 2. Standard config paths
+    for path in ["javascript/config.js", "mobile/javascript/config.js"]:
+        c_body, _, _ = session.get_optional(urljoin(base, path))
+        if c_body:
+            try:
+                return parse_config(c_body.decode("utf-8", errors="replace"), maximum)
+            except UserError:
+                pass
+
+    raise UserError("Konfigurasi pembaca (config.js) tidak ditemukan.")
+
+
 def build_pdf(session, viewer, title, destination: Path, update, cancelled,
               maximum=500, max_bytes=250_000_000):
     base = urljoin(viewer, "./")
-    config, _, _ = session.get(urljoin(base, "mobile/javascript/config.js"))
-    count, normal = parse_config(config.decode("utf-8", errors="replace"), maximum)
+    count, normal = find_config(session, viewer, base, maximum)
+    prefixes = [normal]
+    for alt in ["files/large/", "files/mobile/"]:
+        if alt not in prefixes:
+            prefixes.append(alt)
+    working_prefix = normal
+    for p in prefixes:
+        test_body, _, _ = session.get_optional(urljoin(base, f"{p}1.jpg"))
+        if test_body:
+            working_prefix = p
+            break
     total = 0
     doc = pymupdf.open()
     try:
@@ -167,7 +216,7 @@ def build_pdf(session, viewer, title, destination: Path, update, cancelled,
             body = None
             for attempt in range(3):
                 try:
-                    body, _, _ = session.get(urljoin(base, f"{normal}{index}.jpg"), limit=12_000_000)
+                    body, _, _ = session.get(urljoin(base, f"{working_prefix}{index}.jpg"), limit=12_000_000)
                     break
                 except httpx.TransportError:
                     if attempt == 2:
