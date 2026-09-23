@@ -39,6 +39,10 @@ Prasyarat: Node.js 22+, Python 3.11+, VPN UNAIR aktif.
 
 ## Pemeriksaan dan perbaikan Wireproxy
 
+Perbaikan cleanup VPN ditandai dengan `"revision":"vpn-cleanup-2"` pada `/health`. Jika field ini belum muncul, Back4App masih memakai build lama: periksa repository/branch `main`, aktifkan Auto Deploy atau jalankan redeploy dari commit terbaru. Deployment Vercel tidak memperbarui container Back4App.
+
+Portal eduVPN mengarahkan penghapusan ke `home#active-configurations`. HTTP client membuang fragment tersebut sebelum request, sambil tetap memvalidasi HTTPS dan hostname. Cleanup memilih formulir `delete_config`/`deleteConfig` secara eksplisit, menghapus hanya konfigurasi sesi sendiri, dan memastikan namanya sudah hilang dari daftar aktif. Peringatan cleanup berarti penghapusan belum bisa dikonfirmasi; bukan bukti bahwa VPN atau penyusunan PDF gagal.
+
 Setelah memperbarui kode, **rebuild/redeploy backend Back4App**. Redeploy frontend saja tidak memperbarui kode VPN. Port Back4App adalah `7860`; Docker Compose lokal memakai `8787` dengan `PORT=8787`.
 
 - `/health` sekarang menyertakan `vpn_engine`, `wireproxy_available`, dan `message`. Pada mode portal, binary yang tidak ditemukan menghasilkan status `vpn_unavailable`.

@@ -153,7 +153,7 @@ def health():
     state = "restart_required" if not network_healthy else "vpn_unavailable" if binary_available is False else "ok"
     message = ("Backend perlu direstart karena tunnel sebelumnya belum bersih." if state == "restart_required" else
                "Binary Wireproxy tidak tersedia. Rebuild image backend." if state == "vpn_unavailable" else "")
-    return {"status": state, "vpn_mode": MODE, "vpn_engine": "wireproxy" if MODE == "portal" else "existing",
+    return {"status": state, "revision": "vpn-cleanup-2", "vpn_mode": MODE, "vpn_engine": "wireproxy" if MODE == "portal" else "existing",
             "message": message,
             "wireproxy_available": binary_available,
             "access_key_required": bool(ACCESS_KEY), "retention_seconds": TTL}

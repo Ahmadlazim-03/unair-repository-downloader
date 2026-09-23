@@ -66,10 +66,12 @@ class Session:
     def request(self, method, url, *, data=None, headers=None, limit=6_000_000):
         req_headers = dict(headers or {})
         for _ in range(6):
-            safe_url(url, self.host)
+            # Fragments identify a position in the browser, never an HTTP target.
+            # Keep input_url strict, but handle form/redirect fragments like a browser.
+            url = safe_url(url.split("#", 1)[0], self.host)
             with self.client.stream(method, url, data=data, headers=req_headers) as r:
                 if r.is_redirect:
-                    target = urljoin(url, r.headers.get("location", ""))
+                    target = urljoin(url, r.headers.get("location", "")).split("#", 1)[0]
                     safe_url(target, self.host)  # validate BEFORE forwarding cookies or form data
                     if r.status_code == 303 or (r.status_code in (301, 302) and method == "POST"):
                         method, data = "GET", None

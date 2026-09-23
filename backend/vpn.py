@@ -15,7 +15,7 @@ import threading
 import uuid
 from collections import deque
 from pathlib import Path
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 from bs4 import BeautifulSoup
 
@@ -126,23 +126,42 @@ class Portal:
         body, _, _ = self.post(target_url, fields)
         return extract_wireguard_config(body.decode("utf-8", errors="replace"))
 
+    def _configuration_row(self, soup):
+        for row in soup.select("tr"):
+            if any(x.get("title") == self.name or x.get_text(strip=True) == self.name
+                   for x in row.select("span, td")):
+                return row
+        return None
+
+    @staticmethod
+    def _delete_form(row):
+        for form in row.select("form"):
+            fields = hidden_fields(form)
+            action = urlsplit(form.get("action", "")).path.rstrip("/")
+            if fields.get("connectionId") and (fields.get("action") == "delete_config" or
+                                                action.rsplit("/", 1)[-1] == "deleteConfig"):
+                return form
+        raise UserError("Formulir penghapusan konfigurasi VPN tidak ditemukan.")
+
     def close(self):
         warning = None
         try:
             if self.created:
                 soup, page = self.session.html(VPN + "home")
-                if not soup.select_one('input[name="userPass"]'):
-                    for row in soup.select("tr"):
-                        # Exact generated label only; never delete another client's configuration.
-                        if any(x.get("title") == self.name or x.get_text(strip=True) == self.name
-                               for x in row.select("span, td")):
-                            form = row.select_one("form")
-                            if form:
-                                target_action = form.get("action")
-                                target_url = urljoin(page, target_action) if target_action else page
-                                self.post(target_url, hidden_fields(form))
-                                break
+                if soup.select_one('input[name="userPass"]'):
+                    raise UserError("Sesi portal kedaluwarsa sebelum pembersihan.")
+                row = self._configuration_row(soup)
+                if row is not None:
+                    form = self._delete_form(row)
+                    target_url = urljoin(page, form.get("action") or "")
+                    self.post(target_url, hidden_fields(form))
+                    # Confirm removal even if the portal returns HTTP 200 on a failed POST.
+                    confirmed, _ = self.session.html(VPN + "home")
+                    if confirmed.select_one('input[name="userPass"]') or self._configuration_row(confirmed) is not None:
+                        raise UserError("Portal belum mengonfirmasi penghapusan konfigurasi.")
+                self.created = False
         except Exception as exc:
+            logger.warning("VPN cleanup could not be confirmed (%s)", type(exc).__name__)
             warning = f"Pembersihan sesi VPN belum terkonfirmasi. Periksa konfigurasi {self.name} di portal eduVPN."
         try:
             self.post(VPN + "_logout", {})
