@@ -17,7 +17,7 @@ User cukup buka web, isi URL + kredensial kampus, klik Buat PDF. Server menangan
 
 ### Frontend (Vercel)
 1. Import repository di Vercel. Framework: Vite.
-2. Atur `VITE_API_URL=https://unairrepositorydownloader-zraxnpem.b4a.run`.
+2. Atur `VITE_API_URL=https://unairrepositorydownloader-wlzy1o3f.b4a.run`.
 3. Deploy.
 
 ### Backend (Back4App Containers)
