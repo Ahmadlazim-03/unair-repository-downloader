@@ -78,7 +78,7 @@ def check(api, url, username, password, access_key, output, expected_pages=None)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--api', default='https://unairrepositorydownloader-7859ib84.b4a.run')
+    parser.add_argument('--api', required=True, help='HTTPS URL layanan backend yang sedang diuji')
     parser.add_argument('--url', required=True)
     parser.add_argument('--output', default='.runtime/production-verified.pdf')
     parser.add_argument('--expected-pages', type=int)
